@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Standart.Hash.xxHash;
 using FastestDuplicateFileFinder.Models;
+using System.Net.NetworkInformation;
 
 namespace FastestDuplicateFileFinder;
 
@@ -14,13 +15,18 @@ internal static class Program
     // So, instead of 4 KBs, using 1 MB as the buffer size will be better.
     // I was using 4 MBs before but thanks to Dai, I've changed it to 1 MB: https://stackoverflow.com/questions/1862982/c-sharp-filestream-optimal-buffer-size-for-writing-large-files#comment123344066_1863003
     private const int BufferSize = 1 * 1024 * 1024;
+    private static string path1;
+    private static string path2;
+    private const string batchFileName = "log.bat";
 
     private static async Task Main(string[] paths)
     {
-        if (paths.Length < 1)
+        if (paths.Length < 2)
         {
             throw new ArgumentException("No path specified.");
         }
+        path1 = paths[0];
+        path2 = paths[1];
 
         var files = new List<FileInfo>();
 
@@ -66,7 +72,15 @@ internal static class Program
         Console.WriteLine("Possible duplicate files: " + (possibleDuplicateFileGroups.SelectMany(g => g.Files).Count() - possibleDuplicateFileGroups.Count));
         Console.WriteLine();
 
-        foreach (var duplicateFileGroup in possibleDuplicateFileGroups.OrderBy(g => g.Size)) // We are sorting duplicate file groups from low size to high size.
+        if (!File.Exists(batchFileName))
+        {
+            File.Create(batchFileName);
+            // handle unicode in path (Korean char)
+            File.AppendAllText(batchFileName, "chcp 65001\r\n");
+        }
+
+        // We are sorting duplicate file groups from low size to high size.
+        foreach (var duplicateFileGroup in possibleDuplicateFileGroups.OrderBy(g => g.Size))
         {
             // If there are no possible duplicate files in the current group, skip.
             if (!duplicateFileGroup.Files.Any())
@@ -88,7 +102,7 @@ internal static class Program
                     {
                         continue;
                     }
-                    
+
                     await using var stream = new FileStream(file.FileInfo.FullName, FileMode.Open, FileAccess.Read, FileShare.Read, BufferSize, FileOptions.SequentialScan);
 
                     // If we can't read the stream, skip the file.
@@ -102,8 +116,14 @@ internal static class Program
                     {
                         continue;
                     }
-
-                    stream.Seek(chunk * BufferSize, SeekOrigin.Begin);
+                    try
+                    {
+                        stream.Seek(chunk * BufferSize, SeekOrigin.Begin);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
 
                     var buffer = new byte[BufferSize];
 
@@ -134,18 +154,29 @@ internal static class Program
                 .OrderBy(f => f.FileInfo.CreationTime)
                 .ToList();
 
-            if (duplicateFiles.Any())
+            if (duplicateFiles.Count > 1)
             {
                 var originalFile = duplicateFiles.First();
 
-                Console.WriteLine("Duplicate files for: " + originalFile.FileInfo.FullName);
-
+                //Console.WriteLine("Duplicate files for: " + originalFile.FileInfo.FullName);
+                var log = $"REM {originalFile.FileInfo.FullName}\r\n";
                 foreach (var file in duplicateFiles.Skip(1))
                 {
-                    Console.WriteLine("  " + file.FileInfo.FullName);
+                    if (file.FileInfo.FullName.StartsWith(path2))
+                    {
+                        // delete file
+                        //File.Delete(file.FileInfo.FullName);
+                        //Console.WriteLine("Duplicate file: " + file.FileInfo.FullName);
+                    }
+                    else
+                    {
+                        log += $"del \"{file.FileInfo.FullName}\"\r\n";
+                        Console.Write(".");
+                    }
+                    //Console.WriteLine("  " + file.FileInfo.FullName);
                 }
+                File.AppendAllText(batchFileName, log);
 
-                Console.WriteLine();
             }
         }
 
